@@ -224,12 +224,32 @@ function clampViewBox(x,y,w,h){
 
 function zoomToCluster(cluster){
   cityMode = cluster.key;
-  const w = 16, h = w * (WORLD_VB.h/WORLD_VB.w);
+  const w = 7, h = w * (WORLD_VB.h/WORLD_VB.w);
   const target = clampViewBox(cluster.cx - w/2, cluster.cy - h/2, w, h);
   document.getElementById('backBtn').classList.add('show');
   const label = document.getElementById('cityLabel');
   label.textContent = `${cluster.city}, ${cluster.country}`;
   label.classList.add('show');
+  tweenViewBox(target, 450, renderPins);
+}
+
+function fitToItems(items, label){
+  if(!items.length) return;
+  let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity;
+  items.forEach(d=>{ minX=Math.min(minX,d.x); maxX=Math.max(maxX,d.x); minY=Math.min(minY,d.y); maxY=Math.max(maxY,d.y); });
+  const spanX = maxX-minX, spanY = maxY-minY;
+  const padX = Math.max(spanX*0.4, 2.5), padY = Math.max(spanY*0.4, 1.6);
+  let w = spanX + padX*2, h = spanY + padY*2;
+  const aspect = WORLD_VB.h/WORLD_VB.w;
+  if(h/w < aspect) h = w*aspect; else w = h/aspect;
+  w = Math.max(w, 6); h = w*aspect;
+  const cx = (minX+maxX)/2, cy = (minY+maxY)/2;
+  const target = clampViewBox(cx-w/2, cy-h/2, w, h);
+  cityMode = 'search';
+  document.getElementById('backBtn').classList.add('show');
+  const lbl = document.getElementById('cityLabel');
+  lbl.textContent = label ? (label.charAt(0).toUpperCase()+label.slice(1)) : `${items.length} results`;
+  lbl.classList.add('show');
   tweenViewBox(target, 450, renderPins);
 }
 
@@ -421,6 +441,14 @@ function renderPins(){
   const filteredIds = new Set(filtered.map(d=>d.id));
   const isZoomed = vb.w < WORLD_VB.w * 0.6;
 
+  // Pin/cluster sizes are computed from the SVG's actual on-screen pixel width
+  // so they stay a constant, sane size (a few px) at any zoom level, instead of
+  // a fixed size in SVG-user-space units, which balloons as the viewBox shrinks.
+  const rectW = svgEl().getBoundingClientRect().width || 1400;
+  const pxPerUnit = rectW / vb.w;
+  const dotR = Math.max(0.015, 5.5 / pxPerUnit);
+  const haloR = dotR * 2.5;
+
   if(!isZoomed){
     const clusters = buildClusters(DATA);
     clusters.forEach(cluster=>{
@@ -430,13 +458,14 @@ function renderPins(){
       const dim = visibleItems.length===0;
       if(cluster.items.length===1){
         g.setAttribute('class','pin'+(dim?' dim':''));
-        g.appendChild(svgCircle('halo',11,CAT_COLOR[cluster.items[0].category]));
-        g.appendChild(svgCircle('dot',4.6,CAT_COLOR[cluster.items[0].category]));
+        g.appendChild(svgCircle('halo',haloR,CAT_COLOR[cluster.items[0].category]));
+        g.appendChild(svgCircle('dot',dotR,CAT_COLOR[cluster.items[0].category]));
         g.setAttribute('data-id', cluster.items[0].id);
         g.onclick = ()=> selectItem(cluster.items[0].id, true);
       } else {
         g.setAttribute('class','cluster'+(dim?' dim':''));
-        const r = Math.min(13, 6 + Math.sqrt(cluster.items.length)*2.2);
+        const rPx = Math.min(26, 12 + Math.sqrt(cluster.items.length-1)*4.5);
+        const r = rPx / pxPerUnit;
         g.appendChild(svgCircle('', r, 'var(--wine)'));
         const t = document.createElementNS('http://www.w3.org/2000/svg','text');
         t.setAttribute('y', '.5'); t.setAttribute('font-size', r*0.9);
@@ -450,12 +479,13 @@ function renderPins(){
       layer.appendChild(g);
     });
   } else {
-    // city / zoomed mode: show individual pins, jittered if coincident
+    // city / zoomed mode: show individual pins, jittered apart (in constant
+    // screen pixels, not SVG units) if their real coordinates coincide
     const clusters = buildClusters(DATA);
-    const radiusPx = vb.w * 0.045;
+    const jitterRadius = 34 / pxPerUnit;
     clusters.forEach(cluster=>{
       if(cluster.cx < vb.x - vb.w*0.5 || cluster.cx > vb.x + vb.w*1.5) return;
-      const positions = jitterPositions(cluster.items.length, cluster.cx, cluster.cy, cluster.items.length>1?radiusPx:0);
+      const positions = jitterPositions(cluster.items.length, cluster.cx, cluster.cy, cluster.items.length>1?jitterRadius:0);
       cluster.items.forEach((d,i)=>{
         const pos = positions[i];
         const dim = !filteredIds.has(d.id);
@@ -463,8 +493,8 @@ function renderPins(){
         g.setAttribute('class','pin'+(dim?' dim':''));
         g.setAttribute('transform', `translate(${pos.x},${pos.y})`);
         g.setAttribute('data-id', d.id);
-        g.appendChild(svgCircle('halo',11,CAT_COLOR[d.category]));
-        g.appendChild(svgCircle('dot',4.6,CAT_COLOR[d.category]));
+        g.appendChild(svgCircle('halo',haloR,CAT_COLOR[d.category]));
+        g.appendChild(svgCircle('dot',dotR,CAT_COLOR[d.category]));
         const title = document.createElementNS('http://www.w3.org/2000/svg','title');
         title.textContent = `${d.place} — ${d.city}`;
         g.appendChild(title);
@@ -577,6 +607,13 @@ update();
 document.getElementById('searchInput').addEventListener('input', (e)=>{
   query = e.target.value;
   update();
+  const parsed = parseQuery(query);
+  if(!query.trim()){
+    zoomToWorld();
+  } else if(parsed.location){
+    const matched = DATA.filter(matches);
+    if(matched.length) fitToItems(matched, parsed.location);
+  }
 });
 </script>
 </body>
